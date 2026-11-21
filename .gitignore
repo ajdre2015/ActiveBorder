@@ -1,4 +1,8 @@
 # Build output
+# Packaging output and WiX caches
+artifacts/
+.wix/
+*.wixpdb
 bin/
 obj/
 

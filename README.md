@@ -34,6 +34,18 @@ application to draw anything.
   bar is redrawn, nothing is injected into any process. The outline is four
   separate transparent windows of our own, positioned around the target.
 
+## Windows packages
+
+Windows releases provide three self-contained options:
+
+- **Setup EXE**: guided per-user installation, no administrator rights required.
+- **MSI**: per-user Windows Installer package for managed deployment.
+- **Portable ZIP**: run `ActiveBorder.exe` directly without installing.
+
+Installers place the application under `%LOCALAPPDATA%\Programs\ActiveBorder` and add a Start Menu shortcut. Settings remain per-user. On uninstall, the installer invokes the app's cleanup command to remove only its own Start with Windows registry value. The installer packages are currently unsigned, so Windows SmartScreen may show a warning.
+
+GitHub Actions builds packages on Windows for pull requests and manual runs. Pushing a `vX.Y.Z` tag also publishes the ZIP, MSI, and Setup EXE to a GitHub Release. GUI-driven PowerShell tests are not run on hosted CI because they require an interactive desktop session.
+
 ## Requirements
 
 - Windows 11 (developed against 10.0.26200; Windows 10 1703+ should work but
@@ -56,13 +68,12 @@ installed (about 65 MB):
 
 ```
 dotnet publish -c Release -r win-x64 --self-contained true ^
-  -p:PublishSingleFile=true --source https://api.nuget.org/v3/index.json
+  -p:PublishSingleFile=true
 ```
 
-> The repo ships a `NuGet.config` that clears inherited package sources. This
-> project has no package references, so an ordinary `dotnet build` is fully
-> offline. A self-contained publish is the exception: it needs the .NET
-> runtime packs, hence the explicit `--source`.
+> The repo's `NuGet.config` clears inherited package sources and then adds the
+> official NuGet.org feed. Both `dotnet build` and self-contained publish can
+> restore their required target/runtime packs without a per-command `--source`.
 
 ## Run
 
@@ -99,36 +110,22 @@ the GDI bitmaps are freed before the process exits.
 
 ### Starting it with Windows
 
-Not built in, deliberately. If you want it, put a shortcut to
-`ActiveBorder.exe` in your Startup folder - press Win+R and enter
-`shell:startup`.
+Double-click the tray icon, or open its menu and choose **Settings...**, then enable **Start with Windows**. This registers the current executable under the per-user `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` key. It is disabled by default.
 
+Settings are saved to `%LOCALAPPDATA%\ActiveBorder\settings.json`.
 ## The colour
 
-There is nothing to configure. The border is drawn in your **Windows accent
-colour** - Settings > Personalization > Colors > "Accent color" - and so is
-the tray icon, so the two always match.
+The tray menu's **Settings...** window controls the border colour and width. The colour can follow your **Windows accent colour** (the default) or use a custom colour; the tray icon always matches the effective border colour.
 
-Changing the accent updates a running instance **live**: pick a new colour, or
-let the automatic wallpaper-derived accent move, and the border on screen
-follows within a fraction of a second. Nothing needs restarting.
+When following the system accent, changes update a running instance **live**: pick a new colour, or let the automatic wallpaper-derived accent move, and the border follows without restarting.
 
-The value read is
+The system colour is read from
 `HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Accent\AccentColorMenu`,
 which is the swatch Settings shows rather than the slightly different tint DWM
-paints on active title bars. If it cannot be read at all, the utility falls
-back to `DwmGetColorizationColor`, and then to Windows' own default blue
-`#0078D4`.
+paints on active title bars. If it cannot be read, the utility falls back to
+`DwmGetColorizationColor`, then to Windows' default blue `#0078D4`.
 
-Thickness is a compile-time constant, in
-[`OverlayWindow.cs`](OverlayWindow.cs):
-
-```csharp
-internal const int WIDTH = 5;
-```
-
-It is in *physical* pixels. The process is per-monitor-v2 DPI aware, so the
-system does not scale it: 5 means 5 real pixels on every monitor.
+Border width is configured in **Settings...** from 1 to 20 physical pixels (default 5). The process is per-monitor-v2 DPI aware, so the system does not scale it: 5 means 5 real pixels on every monitor.
 
 ## Tested against
 

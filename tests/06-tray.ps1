@@ -1,3 +1,4 @@
+if (Get-Process ActiveBorder -ErrorAction SilentlyContinue) { throw 'Close existing ActiveBorder instances before running this test; the script will not terminate a user process.' }
 $ErrorActionPreference = 'Stop'
 
 Add-Type -TypeDefinition @'
@@ -128,7 +129,6 @@ function Check($n, $c, $d) {
 
 $exe = (Join-Path $PSScriptRoot '..\bin\Release\net8.0-windows\ActiveBorder.exe')
 
-Get-Process ActiveBorder -ErrorAction SilentlyContinue | ForEach-Object { $_.Kill() }
 Start-Sleep -Milliseconds 500
 
 Write-Host "Starting ActiveBorder..." -ForegroundColor Yellow
@@ -199,14 +199,20 @@ if ($menu -ne [IntPtr]::Zero) {
     if ($hmenu -ne [IntPtr]::Zero) {
         $count = [T1]::GetMenuItemCount($hmenu)
         $sb = New-Object System.Text.StringBuilder 256
-        [void][T1]::GetMenuStringW($hmenu, 0, $sb, $sb.Capacity, 0x0400)  # MF_BYPOSITION
-        $text = $sb.ToString()
-        $id = [T1]::GetMenuItemID($hmenu, 0)
-        Write-Host ("   menu has $count item(s); first = '" + $text + "' id=" + $id)
-        # Strip the & accelerator marker before matching ("E&xit ActiveBorder").
-        $plain = $text -replace '&', ''
-        Check "menu offers a terminate option" ($plain -match 'Exit') ("first item was '" + $text + "'")
-        Check "terminate item carries the exit command id" ($id -eq 100) ("id was " + $id)
+        $count = [T1]::GetMenuItemCount($hmenu)
+        $ids = @()
+        $labels = @()
+        for ($position = 0; $position -lt $count; $position++) {
+            $itemId = [T1]::GetMenuItemID($hmenu, $position)
+            $sb = New-Object System.Text.StringBuilder 256
+            [void][T1]::GetMenuStringW($hmenu, [uint32]$position, $sb, $sb.Capacity, 0x0400)  # MF_BYPOSITION
+            $label = $sb.ToString() -replace '&', ''
+            $ids += $itemId
+            $labels += $label
+        }
+        Write-Host ("   menu has $count item(s): " + ($labels -join ' | ') + "; IDs=" + ($ids -join ', '))
+        Check "menu offers Settings command 101" ($ids -contains 101 -and ($labels -match 'Settings').Count -gt 0) ("IDs=" + ($ids -join ', ') + "; labels=" + ($labels -join ' | '))
+        Check "menu offers Exit command 100" ($ids -contains 100 -and ($labels -match 'Exit').Count -gt 0) ("IDs=" + ($ids -join ', ') + "; labels=" + ($labels -join ' | '))
     } else {
         Write-Host "   (MN_GETHMENU returned null; menu contents not readable cross-process)" -ForegroundColor Yellow
     }
@@ -236,7 +242,6 @@ Check "no tray window left behind"    (@([T1]::ByClass('ActiveBorderTray')).Coun
 Check "no controller window left behind" (@([T1]::ByClass('ActiveBorderController')).Count -eq 0) "controller remains"
 Check "no ActiveBorder process remains" (@(Get-Process ActiveBorder -ErrorAction SilentlyContinue).Count -eq 0) "process remains"
 
-Get-Process ActiveBorder -ErrorAction SilentlyContinue | ForEach-Object { $_.Kill() }
 
 Write-Host ""
 if ($failures -eq 0) { Write-Host "ALL TRAY CHECKS PASSED" -ForegroundColor Green; exit 0 }

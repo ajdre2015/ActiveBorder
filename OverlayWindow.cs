@@ -23,7 +23,6 @@ internal sealed class OverlayWindow : IDisposable
 	 * the process is per-monitor-v2 DPI aware, so this is five real pixels
 	 * on every monitor whatever its scaling.
 	 */
-	internal const int WIDTH = 5;
 
 	private const string CLASS_NAME = "ActiveBorderOverlay";
 
@@ -52,6 +51,8 @@ internal sealed class OverlayWindow : IDisposable
 	// The accent colour the bitmaps above were filled with.
 	private uint _color;
 
+	private int _width = 5;
+
 	private bool _visible;
 	private bool _topmost;
 	private bool _disposed;
@@ -66,6 +67,7 @@ internal sealed class OverlayWindow : IDisposable
 	{
 		var instance = GetModuleHandleW(null);
 		EnsureClassRegistered(instance);
+		_color = AccentColor.Current;
 		CreateStripBitmaps();
 
 		for (var i = 0; i < _edges.Length; i++)
@@ -97,7 +99,7 @@ internal sealed class OverlayWindow : IDisposable
 	{
 		// A window narrower or shorter than two borders has nowhere sensible
 		// to put a rectangle.
-		if (bounds.Width < WIDTH * 2 || bounds.Height < WIDTH * 2)
+		if (bounds.Width < _width * 2 || bounds.Height < _width * 2)
 		{
 			Hide();
 			return;
@@ -107,10 +109,10 @@ internal sealed class OverlayWindow : IDisposable
 		// outside it. Outside would fall off the screen (or under the
 		// taskbar) for maximized and snapped windows, which is exactly where
 		// a focus indicator is most needed.
-		var top = Rect(bounds.Left, bounds.Top, bounds.Right, bounds.Top + WIDTH);
-		var bottom = Rect(bounds.Left, bounds.Bottom - WIDTH, bounds.Right, bounds.Bottom);
-		var left = Rect(bounds.Left, bounds.Top + WIDTH, bounds.Left + WIDTH, bounds.Bottom - WIDTH);
-		var right = Rect(bounds.Right - WIDTH, bounds.Top + WIDTH, bounds.Right, bounds.Bottom - WIDTH);
+		var top = Rect(bounds.Left, bounds.Top, bounds.Right, bounds.Top + _width);
+		var bottom = Rect(bounds.Left, bounds.Bottom - _width, bounds.Right, bounds.Bottom);
+		var left = Rect(bounds.Left, bounds.Top + _width, bounds.Left + _width, bounds.Bottom - _width);
+		var right = Rect(bounds.Right - _width, bounds.Top + _width, bounds.Right, bounds.Bottom - _width);
 
 		_bounds = bounds;
 
@@ -193,8 +195,8 @@ internal sealed class OverlayWindow : IDisposable
 
 		// Guard against a window somehow larger than the bitmaps we sized to
 		// the virtual screen; clamping is better than a failed draw.
-		var width = Math.Min(rect.Width, horizontal ? _stripLength : WIDTH);
-		var height = Math.Min(rect.Height, horizontal ? WIDTH : _stripLength);
+		var width = Math.Min(rect.Width, horizontal ? _stripLength : _width);
+		var height = Math.Min(rect.Height, horizontal ? _width : _stripLength);
 		if (width <= 0 || height <= 0)
 			return;
 
@@ -318,16 +320,20 @@ internal sealed class OverlayWindow : IDisposable
 	}
 
 	/**
-     * Rebuild the strip bitmaps in the current accent colour. Returns true
-     * only when the colour had actually changed, so the caller redraws for a
-     * real change and ignores the several notifications Windows sends for
-     * one trip through the colour picker.
+     * Apply the committed color and border width. Returns true only when the
+     * rendered appearance actually changed.
      */
-	internal bool OnAccentColorChanged()
+	internal bool ApplyAppearance(uint colorArgb, int widthPx)
 	{
-		if (AccentColor.Current == _color)
+		if (widthPx is < 1 or > 20)
+			throw new ArgumentOutOfRangeException(nameof(widthPx));
+		if (colorArgb >> 24 != 0xFF)
+			throw new ArgumentOutOfRangeException(nameof(colorArgb), "Border color must be opaque.");
+		if (_color == colorArgb && _width == widthPx)
 			return false;
 
+		_color = colorArgb;
+		_width = widthPx;
 		Rebuild();
 		return true;
 	}
@@ -356,14 +362,13 @@ internal sealed class OverlayWindow : IDisposable
 	private void CreateStripBitmaps()
 	{
 		_stripLength = RequiredStripLength();
-		_color = AccentColor.Current;
 
 		_horizontalDc = CreateCompatibleDC(IntPtr.Zero);
-		_horizontalBitmap = CreateSolidDib(_stripLength, WIDTH, _color);
+		_horizontalBitmap = CreateSolidDib(_stripLength, _width, _color);
 		_horizontalOldBitmap = SelectObject(_horizontalDc, _horizontalBitmap);
 
 		_verticalDc = CreateCompatibleDC(IntPtr.Zero);
-		_verticalBitmap = CreateSolidDib(WIDTH, _stripLength, _color);
+		_verticalBitmap = CreateSolidDib(_width, _stripLength, _color);
 		_verticalOldBitmap = SelectObject(_verticalDc, _verticalBitmap);
 	}
 

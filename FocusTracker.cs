@@ -38,6 +38,8 @@ internal sealed class FocusTracker : IDisposable
 
 	private readonly OverlayWindow _overlay = new();
 
+	private BorderSettings _settings = BorderSettings.Default;
+
 	// Delegates handed to Win32 must stay reachable for the lifetime of the
 	// hook / window class, otherwise the GC collects the thunk and the next
 	// callback tears down the process.
@@ -64,8 +66,11 @@ internal sealed class FocusTracker : IDisposable
 	private int _accentRecheckTicks;
 	private bool _disposed;
 
-	internal FocusTracker()
+	internal FocusTracker(BorderSettings? settings = null)
 	{
+		_settings = settings ?? BorderSettings.Default;
+		AccentColor.Reload();
+		_overlay.ApplyAppearance(_settings.ResolveEffectiveColor(AccentColor.Current), _settings.BorderWidth);
 		_wndProc = ControllerWndProc;
 		_systemEventProc = OnSystemEvent;
 		_objectEventProc = OnObjectEvent;
@@ -116,7 +121,7 @@ internal sealed class FocusTracker : IDisposable
      * rather than repeating the whole mechanism, and compares against the
      * colour it last drew with.
      */
-	internal event Action? AccentColorChanged;
+	internal event Action<uint>? AppearanceColorChanged;
 
 	private static IntPtr Hook(uint min, uint max, WinEventProc callback) => SetWinEventHook(min, max, IntPtr.Zero, callback, 0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
 
@@ -357,24 +362,33 @@ internal sealed class FocusTracker : IDisposable
 	// ------------------------------------------------------------------
 
 	/**
-     * Re-read the accent colour and repaint the border if it moved. Cheap
-     * enough to call speculatively: when the colour is unchanged the overlay
-     * does nothing at all.
+     * Apply committed settings and repaint the current target.
      */
+	internal void ApplySettings(BorderSettings settings)
+	{
+		ArgumentNullException.ThrowIfNull(settings);
+		_settings = settings;
+		AccentColor.Reload();
+		var color = settings.ResolveEffectiveColor(AccentColor.Current);
+		_overlay.ApplyAppearance(color, settings.BorderWidth);
+		_hasBounds = false;
+		Refresh(reassertZOrder: true);
+		AppearanceColorChanged?.Invoke(color);
+	}
+
 	private void ApplyAccentColor()
 	{
 		AccentColor.Reload();
+		if (!_settings.FollowSystemAccent)
+			return;
 
-		if (_overlay.OnAccentColorChanged())
-		{
-			// The strips have new bitmaps but the same geometry, so Refresh
-			// would find nothing to do. Forgetting the last bounds makes it
-			// redraw.
-			_hasBounds = false;
-			Refresh(reassertZOrder: false);
-		}
+		var color = _settings.ResolveEffectiveColor(AccentColor.Current);
+		if (!_overlay.ApplyAppearance(color, _settings.BorderWidth))
+			return;
 
-		AccentColorChanged?.Invoke();
+		_hasBounds = false;
+		Refresh(reassertZOrder: true);
+		AppearanceColorChanged?.Invoke(color);
 	}
 
 	private void GoFast()

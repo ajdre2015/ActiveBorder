@@ -1,0 +1,16 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal">
+  <Bundle Name="ActiveBorder Setup"
+          Manufacturer="ajdre2015"
+          Version="$(var.ProductVersion)"
+          UpgradeCode="2D8BBE9F-1748-4ED1-AAB4-950737247B58">
+    <BootstrapperApplication>
+      <bal:WixStandardBootstrapperApplication
+          Theme="hyperlinkLicense"
+          LicenseUrl="https://github.com/ajdre2015/ActiveBorder/blob/master/LICENSE" />
+    </BootstrapperApplication>
+    <Chain>
+      <MsiPackage Id="ActiveBorderMsi" SourceFile="$(var.MsiPath)" />
+    </Chain>
+  </Bundle>
+</Wix>

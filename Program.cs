@@ -6,23 +6,31 @@ namespace ActiveBorder;
 internal static class Program
 {
 	[STAThread]
-	private static int Main()
+	private static int Main(string[] args)
 	{
+		if (args.Length == 1 && string.Equals(args[0], "--uninstall-cleanup", StringComparison.Ordinal))
+		{
+			new StartupManager().SetEnabled(false);
+			return 0;
+		}
 		MakeDpiAware();
 
 		try
 		{
 			// Disposed in reverse order of declaration, so the tray icon is
 			// removed before the hooks and overlay windows go away.
-			using var tracker = new FocusTracker();
-			using var tray = new TrayIcon();
+			var store = new SettingsStore();
+			var startup = new StartupManager();
+			var settings = store.Load();
+			AccentColor.Reload();
 
-			// The tracker is where the accent colour is watched, because it
-			// owns the only timer in the process; the tray icon follows it so
-			// the icon and the border are always the same colour.
-			tracker.AccentColorChanged += tray.RefreshIcon;
-
-			return RunMessageLoop();
+			// Declaration order is the reverse of the required shutdown order:
+			// controller, settings window, tray, tracker.
+			using var tracker = new FocusTracker(settings);
+			using var tray = new TrayIcon(settings.ResolveEffectiveColor(AccentColor.Current));
+			using var settingsWindow = new SettingsWindow(tray.WindowHandle);
+			using var controller = new SettingsController(settings, store, startup, tracker, tray, settingsWindow);
+			return RunMessageLoop(settingsWindow);
 		}
 		catch (Exception ex)
 		{
@@ -57,7 +65,7 @@ internal static class Program
      * hooks are delivered by dispatching to the thread that installed them, so
      * the callbacks only fire while this loop runs.
      */
-	private static int RunMessageLoop()
+	private static int RunMessageLoop(SettingsWindow settingsWindow)
 	{
 		while (true)
 		{
@@ -69,8 +77,11 @@ internal static class Program
 			if (result == -1)
 				return 1;
 
-			TranslateMessage(ref msg);
-			DispatchMessageW(ref msg);
+			if (!settingsWindow.TryTranslateMessage(ref msg))
+			{
+				TranslateMessage(ref msg);
+				DispatchMessageW(ref msg);
+			}
 		}
 	}
 }
