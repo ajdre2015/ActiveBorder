@@ -1,0 +1,54 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="ActiveBorder"
+           Manufacturer="ajdre2015"
+           Version="$(var.ProductVersion)"
+           UpgradeCode="D96B9E2B-AF8E-4A15-A5DE-337C0F52B1CA"
+           Scope="perUser"
+           InstallerVersion="500">
+    <MajorUpgrade DowngradeErrorMessage="A newer version of ActiveBorder is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="ProgramsFolder" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="ActiveBorder">
+          <Component Id="ApplicationFiles" Guid="*">
+            <File Id="ActiveBorderExe" Source="$(var.PublishDir)\ActiveBorder.exe" KeyPath="yes" />
+          </Component>
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="ApplicationProgramsFolder" Name="ActiveBorder">
+        <Component Id="StartMenuShortcut" Guid="*">
+          <Shortcut Id="ActiveBorderShortcut"
+                    Name="ActiveBorder"
+                    Target="[INSTALLFOLDER]ActiveBorder.exe"
+                    WorkingDirectory="INSTALLFOLDER" />
+          <RemoveFolder Id="RemoveApplicationProgramsFolder" On="uninstall" />
+          <RegistryValue Root="HKCU"
+                         Key="Software\ajdre2015\ActiveBorder\Installer"
+                         Name="Installed"
+                         Type="integer"
+                         Value="1"
+                         KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
+		<CustomAction Id="RemoveStartupEntry"
+					  FileRef="ActiveBorderExe"
+					  ExeCommand="--uninstall-cleanup"
+					  Execute="deferred"
+					  Impersonate="yes"
+					  Return="check" />
+		<InstallExecuteSequence>
+			<Custom Action="RemoveStartupEntry" Before="RemoveFiles" Condition="REMOVE~=&quot;ALL&quot;" />
+		</InstallExecuteSequence>
+
+    <Feature Id="MainFeature" Title="ActiveBorder" Level="1">
+      <ComponentRef Id="ApplicationFiles" />
+      <ComponentRef Id="StartMenuShortcut" />
+    </Feature>
+  </Package>
+</Wix>

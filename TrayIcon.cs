@@ -17,6 +17,10 @@ internal sealed class TrayIcon : IDisposable
 	private const uint ICON_ID = 1;
 	private const uint COMMAND_EXIT = 100;
 
+	private const uint COMMAND_SETTINGS = 101;
+
+	private const uint WM_LBUTTONDBLCLK = 0x0203;
+
 	/** Private message the shell sends us for icon mouse events. */
 	private const uint TRAY_CALLBACK_MESSAGE = WM_APP + 1;
 
@@ -26,6 +30,9 @@ internal sealed class TrayIcon : IDisposable
 
 	private readonly IntPtr _window;
 	private readonly IntPtr _menu;
+
+	internal IntPtr WindowHandle => _window;
+	internal event Action? SettingsRequested;
 
 	// The icon is redrawn whenever the accent colour changes, so neither it
 	// nor the colour it was drawn in is readonly.
@@ -43,7 +50,7 @@ internal sealed class TrayIcon : IDisposable
 	private bool _iconAdded;
 	private bool _disposed;
 
-	internal TrayIcon()
+	internal TrayIcon(uint initialColor)
 	{
 		_wndProc = TrayWndProc;
 
@@ -71,7 +78,7 @@ internal sealed class TrayIcon : IDisposable
 
 		_taskbarCreated = RegisterWindowMessageW("TaskbarCreated");
 
-		_iconColor = AccentColor.Current;
+		_iconColor = initialColor;
 		_icon = CreateBorderIcon(GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), _iconColor);
 
 		_menu = CreatePopupMenu();
@@ -79,6 +86,8 @@ internal sealed class TrayIcon : IDisposable
 		if (_menu == IntPtr.Zero)
 			throw new InvalidOperationException("CreatePopupMenu failed: " + Marshal.GetLastWin32Error());
 
+		AppendMenuW(_menu, MF_STRING, new UIntPtr(COMMAND_SETTINGS), "Settings...");
+		AppendMenuW(_menu, 0x0800, UIntPtr.Zero, string.Empty);
 		AppendMenuW(_menu, MF_STRING, new UIntPtr(COMMAND_EXIT), "E&xit ActiveBorder");
 
 		if (!AddIcon())
@@ -103,15 +112,15 @@ internal sealed class TrayIcon : IDisposable
      * is what makes it safe to call on every colour notification Windows
      * sends - and it sends several for one trip through the colour picker.
      */
-	internal void RefreshIcon()
+	internal void RefreshIcon(uint colorArgb)
 	{
-		if (_disposed || AccentColor.Current == _iconColor)
+		if (_disposed || colorArgb == _iconColor)
 			return;
 
 		IntPtr replacement;
 		try
 		{
-			replacement = CreateBorderIcon(GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), AccentColor.Current);
+			replacement = CreateBorderIcon(GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), colorArgb);
 		}
 		catch (InvalidOperationException)
 		{
@@ -123,7 +132,7 @@ internal sealed class TrayIcon : IDisposable
 
 		var previous = _icon;
 		_icon = replacement;
-		_iconColor = AccentColor.Current;
+		_iconColor = colorArgb;
 
 		if (_iconAdded)
 		{
@@ -156,8 +165,11 @@ internal sealed class TrayIcon : IDisposable
 		{
 			// Classic (pre-version-4) callback packing: wParam is the icon id
 			// and lParam is the mouse message.
-			if ((uint)lParam.ToInt64() == WM_RBUTTONUP)
+			var mouseMessage = unchecked((uint)lParam.ToInt64());
+			if (mouseMessage == WM_RBUTTONUP)
 				ShowContextMenu();
+			else if (mouseMessage == WM_LBUTTONDBLCLK)
+				SettingsRequested?.Invoke();
 
 			return IntPtr.Zero;
 		}
@@ -171,8 +183,16 @@ internal sealed class TrayIcon : IDisposable
 		switch (msg)
 		{
 			case WM_COMMAND:
-				if ((wParam.ToInt64() & 0xFFFF) == COMMAND_EXIT)
-					PostQuitMessage(0);
+				switch ((wParam.ToInt64() & 0xFFFF))
+				{
+					case COMMAND_SETTINGS:
+						SettingsRequested?.Invoke();
+						return IntPtr.Zero;
+
+					case COMMAND_EXIT:
+						PostQuitMessage(0);
+						return IntPtr.Zero;
+				}
 				return IntPtr.Zero;
 
 			case WM_CLOSE:

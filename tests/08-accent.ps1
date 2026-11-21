@@ -7,6 +7,7 @@
 # WM_SETTINGCHANGE that the Settings app does. The original value is saved up
 # front and put back in the finally block, including on Ctrl+C, and no other
 # personalisation value is touched.
+if (Get-Process ActiveBorder -ErrorAction SilentlyContinue) { throw 'Close existing ActiveBorder instances before running this test; the script will not terminate a user process.' }
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
 
@@ -45,6 +46,14 @@ public static class C8 {
     ShowWindow(h,9); BringWindowToTop(h); SetForegroundWindow(h);
     if(fg!=0&&fg!=me)AttachThreadInput(me,fg,false);}
   public static RECT Frame(IntPtr h){ RECT r; if(DwmGetWindowAttribute(h,9,out r,16)==0 && r.R>r.L) return r; GetWindowRect(h,out r); return r; }
+  [DllImport("user32.dll")] public static extern IntPtr GetDC(IntPtr h);
+  [DllImport("user32.dll")] public static extern int ReleaseDC(IntPtr h, IntPtr dc);
+  [DllImport("gdi32.dll")] public static extern bool BitBlt(IntPtr dst,int dx,int dy,int w,int h,IntPtr src,int sx,int sy,int rop);
+  public static bool CaptureScreenPixel(IntPtr dst,int x,int y){
+    IntPtr src=GetDC(IntPtr.Zero); if(src==IntPtr.Zero)return false;
+    try{return BitBlt(dst,0,0,1,1,src,x,y,unchecked((int)0x40CC0020));}
+    finally{ReleaseDC(IntPtr.Zero,src);}
+  }
   // HWND_BROADCAST, WM_SETTINGCHANGE, SMTO_ABORTIFHUNG - exactly what the
   // Settings app sends after it writes the new accent to the registry.
   public static void BroadcastColorChange(){ IntPtr r;
@@ -91,13 +100,27 @@ function Sample($frame) {
     $x = $frame.L + [int](($frame.R - $frame.L) / 2)
     $bmp = New-Object System.Drawing.Bitmap(1, 1)
     $g = [System.Drawing.Graphics]::FromImage($bmp)
-    $g.CopyFromScreen($x, $frame.T + 2, 0, 0, (New-Object System.Drawing.Size(1, 1)))
-    $g.Dispose()
-    $c = $bmp.GetPixel(0, 0)
-    $bmp.Dispose()
-    return "{0:X2}{1:X2}{2:X2}" -f $c.R, $c.G, $c.B
+    try {
+        $hdc = $g.GetHdc()
+        try {
+            if (-not [C8]::CaptureScreenPixel($hdc, $x, ($frame.T + 2))) { throw 'BitBlt failed while sampling the layered border.' }
+        } finally {
+            $g.ReleaseHdc($hdc)
+        }
+        $c = $bmp.GetPixel(0, 0)
+        return "{0:X2}{1:X2}{2:X2}" -f $c.R, $c.G, $c.B
+    } finally {
+        $g.Dispose()
+        $bmp.Dispose()
+    }
 }
 
+$settingsFixturePath = Join-Path $env:LOCALAPPDATA 'ActiveBorder\settings.json'
+$settingsFixtureDir = Split-Path $settingsFixturePath
+$hadSettingsFixture = Test-Path $settingsFixturePath
+$originalSettingsFixture = if ($hadSettingsFixture) { [IO.File]::ReadAllBytes($settingsFixturePath) } else { $null }
+New-Item -ItemType Directory -Path $settingsFixtureDir -Force | Out-Null
+[IO.File]::WriteAllText($settingsFixturePath, '{"version":1,"followSystemAccent":true,"customColor":"#FF0078D4","borderWidth":5}', [Text.UTF8Encoding]::new($false))
 $exe = (Join-Path $PSScriptRoot '..\bin\Release\net8.0-windows\ActiveBorder.exe')
 $original = Get-AccentRaw
 $originalRgb = RawToRgb $original
@@ -112,7 +135,6 @@ $win = $null
 $target = [IntPtr]::Zero
 
 try {
-    Get-Process ActiveBorder -ErrorAction SilentlyContinue | ForEach-Object { $_.Kill() }
     Start-Sleep -Milliseconds 500
 
     $app = Start-Process $exe -PassThru
@@ -163,6 +185,8 @@ try {
     Check "running instance repainted to #$originalRgb" ($seen -eq $originalRgb) "measured #$seen"
 }
 finally {
+    if ($hadSettingsFixture) { [IO.File]::WriteAllBytes($settingsFixturePath, $originalSettingsFixture) }
+    elseif (Test-Path $settingsFixturePath) { Remove-Item $settingsFixturePath -Force }
     # Put the accent back exactly as it was, whatever happened above, and tell
     # everything else on the desktop to re-read it.
     Set-ItemProperty $ACCENT_PATH -Name $ACCENT_NAME -Value $original -Type DWord
@@ -174,7 +198,6 @@ finally {
     }
     if ($win) { try { $win.Kill() } catch {} }
     if ($app) { try { $app.Kill() } catch {} }
-    Get-Process ActiveBorder -ErrorAction SilentlyContinue | ForEach-Object { $_.Kill() }
 }
 
 Write-Host ""

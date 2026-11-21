@@ -1,0 +1,156 @@
+name: Windows packages
+
+on:
+  push:
+    branches:
+      - '**'
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Three-part package version (for example 1.2.3)
+        required: true
+        default: 1.0.0
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: windows-latest
+
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+        with:
+          persist-credentials: false
+
+      - name: Set up .NET 8
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Resolve package version
+        id: version
+        shell: pwsh
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if ($env:GITHUB_REF_TYPE -eq 'tag') {
+            $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          } elseif (-not [string]::IsNullOrWhiteSpace($env:INPUT_VERSION)) {
+            $version = $env:INPUT_VERSION
+          } else {
+            $version = "1.0.$env:GITHUB_RUN_NUMBER"
+          }
+          if ($version -notmatch '^(?<major>0|[1-9]\d{0,2})\.(?<minor>0|[1-9]\d{0,2})\.(?<build>0|[1-9]\d{0,4})$') {
+            throw "Version must contain three non-negative numeric parts without leading zeros: $version"
+          }
+          if ([int]$Matches.major -gt 255 -or [int]$Matches.minor -gt 255 -or [int]$Matches.build -gt 65535) {
+            throw "Version exceeds Windows Installer limits (major/minor <= 255, build <= 65535): $version"
+          }
+          "value=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Parse PowerShell regression scripts
+        shell: pwsh
+        run: |
+          $errors = @()
+          Get-ChildItem tests -Filter '*.ps1' | Where-Object { $_.Name -match '^\d{2}-' } | ForEach-Object {
+            $tokens = $null
+            $parseErrors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$parseErrors) | Out-Null
+            if ($parseErrors.Count -gt 0) {
+              $errors += $parseErrors | ForEach-Object { "$($_.Extent.File):$($_.Extent.StartLineNumber): $($_.Message)" }
+            }
+          }
+          if ($errors.Count -gt 0) { $errors | Write-Error; exit 1 }
+          Write-Host 'PowerShell regression scripts parse successfully.'
+
+
+      - name: Build and publish self-contained app
+        shell: pwsh
+        run: |
+          dotnet build ActiveBorder.csproj --configuration Release; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet publish ActiveBorder.csproj --configuration Release --runtime win-x64 --self-contained true `
+            -p:PublishSingleFile=true -p:DebugType=None -p:DebugSymbols=false `
+            --output artifacts/publish
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Test-Path artifacts/publish/ActiveBorder.exe)) { throw 'Published executable is missing.' }
+
+      - name: Test uninstall cleanup command
+        shell: pwsh
+        run: ./tests/11-uninstall-cleanup.ps1
+      - name: Create portable ZIP
+        shell: pwsh
+        run: |
+          Compress-Archive -Path artifacts/publish/ActiveBorder.exe -DestinationPath artifacts/ActiveBorder-win-x64-portable.zip
+
+      - name: Install WiX Toolset
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix --version 6.0.2
+          $env:PATH = "$env:USERPROFILE\.dotnet\tools;$env:PATH"
+          wix extension add WixToolset.BootstrapperApplications.wixext/6.0.2
+
+      - name: Build per-user MSI and Setup EXE
+        shell: pwsh
+        env:
+          PACKAGE_VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          $env:PATH = "$env:USERPROFILE\.dotnet\tools;$env:PATH"
+          wix build installer/ActiveBorder.wxs -arch x64 `
+            -d "ProductVersion=$env:PACKAGE_VERSION" `
+            -d "PublishDir=$((Resolve-Path artifacts/publish).Path)" `
+            -o artifacts/ActiveBorder-win-x64.msi
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          wix build installer/ActiveBorderBundle.wxs -arch x64 -ext WixToolset.BootstrapperApplications.wixext `
+            -d "ProductVersion=$env:PACKAGE_VERSION" `
+            -d "MsiPath=$((Resolve-Path artifacts/ActiveBorder-win-x64.msi).Path)" `
+            -o artifacts/ActiveBorder-win-x64-setup.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ActiveBorder-Windows
+          path: |
+            artifacts/ActiveBorder-win-x64-portable.zip
+            artifacts/ActiveBorder-win-x64.msi
+            artifacts/ActiveBorder-win-x64-setup.exe
+          if-no-files-found: error
+          retention-days: 30
+
+
+  release:
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download Windows packages
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ActiveBorder-Windows
+          path: artifacts
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          version="${RELEASE_TAG#v}"
+          gh release create "$RELEASE_TAG" \
+            artifacts/ActiveBorder-win-x64-portable.zip \
+            artifacts/ActiveBorder-win-x64.msi \
+            artifacts/ActiveBorder-win-x64-setup.exe \
+            --title "ActiveBorder $version" \
+            --generate-notes

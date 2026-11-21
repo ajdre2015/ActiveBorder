@@ -1,3 +1,4 @@
+if (Get-Process ActiveBorder -ErrorAction SilentlyContinue) { throw 'Close existing ActiveBorder instances before running this test; the script will not terminate a user process.' }
 $ErrorActionPreference = 'Stop'
 
 Add-Type -TypeDefinition @'
@@ -90,6 +91,17 @@ public static class W
 
 [void][W]::SetProcessDpiAwarenessContext([IntPtr]::new(-4))
 
+$settingsFixturePath = Join-Path $env:LOCALAPPDATA 'ActiveBorder\settings.json'
+$settingsFixtureDir = Split-Path $settingsFixturePath
+$hadSettingsFixture = Test-Path $settingsFixturePath
+$originalSettingsFixture = if ($hadSettingsFixture) { [IO.File]::ReadAllBytes($settingsFixturePath) } else { $null }
+function Restore-GeometrySettingsFixture {
+    if ($script:hadSettingsFixture) { [IO.File]::WriteAllBytes($script:settingsFixturePath, $script:originalSettingsFixture) }
+    elseif (Test-Path $script:settingsFixturePath) { Remove-Item $script:settingsFixturePath -Force }
+}
+trap { Restore-GeometrySettingsFixture; throw }
+New-Item -ItemType Directory -Path $settingsFixtureDir -Force | Out-Null
+[IO.File]::WriteAllText($settingsFixturePath, '{"version":1,"followSystemAccent":true,"customColor":"#FF0078D4","borderWidth":5}', [Text.UTF8Encoding]::new($false))
 $T = 5
 $script:failures = 0
 function Check($name, $cond, $detail) {
@@ -145,7 +157,6 @@ function Verify-Border($label, $hwnd) {
 # ----------------------------------------------------------------------
 $exe = (Join-Path $PSScriptRoot '..\bin\Release\net8.0-windows\ActiveBorder.exe')
 
-Get-Process ActiveBorder -ErrorAction SilentlyContinue | ForEach-Object { $_.Kill() }
 Start-Sleep -Milliseconds 400
 Write-Host "Starting ActiveBorder..." -ForegroundColor Yellow
 $app = Start-Process -FilePath $exe -PassThru -WindowStyle Minimized
@@ -163,6 +174,7 @@ for ($i = 0; $i -lt 60 -and $hwnd -eq [IntPtr]::Zero; $i++) {
 
 if ($hwnd -eq [IntPtr]::Zero) {
     Write-Host "Could not create the test window." -ForegroundColor Red
+    Restore-GeometrySettingsFixture
     $app.Kill(); exit 2
 }
 
@@ -223,6 +235,7 @@ if ($fgEligible) {
 Write-Host ""
 Write-Host "Cleaning up..." -ForegroundColor Yellow
 [void][W]::PostMessageW($hwnd, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)
+Restore-GeometrySettingsFixture
 Start-Sleep -Milliseconds 500
 try { $helper.Kill() } catch {}
 try { $app.Kill() } catch {}
